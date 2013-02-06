@@ -1,0 +1,9 @@
+domain brown_short selected
+reading in training data
+generating counts for ngrams in training data
+reading in heldout data
+linear interpolation perplexity
+1.1059984955232436
+reading in vocab
+katz backoff perplexity
+1.0938522764490533
