@@ -12,6 +12,7 @@ import java.util.*;
  */
 public class POSTaggerTester {
 
+  static final String UNKNOWN_WORD = "<UNK>";
   static final String START_WORD = "<S>";
   static final String STOP_WORD = "</S>";
   static final String START_TAG = "<S>";
@@ -292,9 +293,6 @@ public class POSTaggerTester {
       // backPointers array doesn't have a value at k=0
       backPointers.add(k, null);
 
-      Set<S> currentStatesSet = new HashSet<S>();
-      currentStatesSet.addAll(trellis.getForwardTransitions(startState).keySet());
-      Set<S> nextStateSet = new HashSet<S>();
 
       // start at the beginning.
       boolean endStateReached = false;
@@ -303,39 +301,38 @@ public class POSTaggerTester {
         optArray.add(k, new Counter<S>());
         backPointers.add(k, new HashMap<S,S>());
 
-        // for each possible next state, where a state is a tag bigram (u,v)
-        for (S nextState : currentStatesSet) {
-          endStateReached |= nextState.equals(endState);
+        prevTransitions = optArray.get(k-1);
 
-          nextStateSet.addAll(trellis.getForwardTransitions(nextState).keySet());
-          prevTransitions = trellis.getBackwardTransitions(nextState);
+        // for each previous state, where a state is a tag bigram (w,u)
+        for (S prevState : prevTransitions.keySet()) {
           // find the max score for the expression score(k-1, w, u) * HMM score function
           // in practice, that means we'll have to convert the HMM scores by the following Math.exp(transitions.argMax())
           // pi(k,u,v) = max(pi(k-1,u,v)*q(v|w,u)*e(x|v))
+          
+          // get score value of pi(k-1,u,v)
+          double optScore = prevTransitions.getCount(prevState);
 
-          // determine the optimal score and previous state to produce the next state
-          double bestScore = Double.NEGATIVE_INFINITY;
-          S bestPrevState = null;
-          for (S prevState : prevTransitions.keySet()) {
-            // get max score value of HMM score q(v|w,u) * e(x|v)
-            double score = optArray.get(k-1).getCount(prevState) * prevTransitions.getCount(prevState);
-            if (score > bestScore) {
-              bestScore = score;
-              bestPrevState = prevState;
+          Counter<S> nextTransitions = trellis.getForwardTransitions(prevState);
+          endStateReached |= nextTransitions.containsKey(endState);
+          // for each possible next state, where a state is a tag bigram (u,v)
+          for (S nextState : nextTransitions.keySet()) {
+
+            // get score value of HMM score q(v|w,u) * e(x|v)
+            double nextScore = Math.exp(nextTransitions.getCount(nextState));
+
+            // determine the optimal score and previous state to produce the next state
+            double score = optScore * nextScore;
+            if (score >= optArray.get(k).getCount(nextState)) {
+              // remember the best score in the OPT array
+              optArray.get(k).setCount(nextState, score);
+              // remember the state that will produce the best score
+              backPointers.get(k).put(nextState, prevState);
             }
           }
-          // remember the best score in the OPT array
-          optArray.get(k).incrementCount(nextState, bestScore);
-          // remember the state that will produce the best score
-          backPointers.get(k).put(nextState, bestPrevState);
         }
-
-        //System.out.print(k+".");
-        // iterate to the next column in the trellis and update our values
-        currentStatesSet = nextStateSet;
-        nextStateSet = new HashSet<S>();
+        System.out.print(k+"~");
       }
-      //System.out.println();
+      System.out.println("done");
 
       // backsolve the OPT array
       List<S> states = new ArrayList<S>();
@@ -642,6 +639,7 @@ public class POSTaggerTester {
     CounterMap<String, String> tagTrigramCounters = new CounterMap<String, String>();
     Counter<String> unknownWordTags = new Counter<String>();
     Set<String> seenTagTrigrams = new HashSet<String>();
+    Set<String> seenWords = new HashSet<String>();
 
     public int getHistorySize() {
       return 2;
@@ -655,6 +653,7 @@ public class POSTaggerTester {
     public Counter<String> getLogScoreCounter(LocalTrigramContext localTrigramContext) {
       int position = localTrigramContext.getPosition();
       String word = localTrigramContext.getWords().get(position);
+      word = (seenWords.contains(word)) ? word : UNKNOWN_WORD;
 
       // get the 2 previous tags for this context
       String tagBigram = makeBigramString(localTrigramContext.getPreviousPreviousTag(), localTrigramContext.getPreviousTag());
@@ -681,11 +680,15 @@ public class POSTaggerTester {
         Counter<String> wordCounter = tagToWordCounters.getCounter(tag);
         
         // score = probability of seeing this tag after the previous 2 tags * probability of seeing the current word given this tag
-        double tagScore = trigramCounter.getCount(tag) * wordCounter.getCount(word);
+        double transition = trigramCounter.getCount(tag);
+        double emission = wordCounter.getCount(word);
 
-        if (!restrictTrigrams || allowedFollowingTags.isEmpty() || allowedFollowingTags.contains(tag))
-          // make sure to not Log a value of zero
-          tagScoreCounter.setCount(tag, Math.log( (tagScore > 0) ? tagScore : Double.MIN_VALUE) );
+        // make sure to never Log a value of zero
+        transition = Math.log( (transition > 0) ? transition : Double.MIN_VALUE );
+        emission = Math.log( (emission > 0) ? emission : Double.MIN_VALUE );
+
+        //if (!restrictTrigrams || allowedFollowingTags.isEmpty() || allowedFollowingTags.contains(tag))
+          tagScoreCounter.setCount(tag, (transition + emission) );
       }
       return tagScoreCounter;
     }
@@ -719,8 +722,15 @@ public class POSTaggerTester {
         tagToWordCounters.incrementCount(tag, word, 1.0);
         tagTrigramCounters.incrementCount(tagBigram, tag, 1.0);
 
+        seenWords.add(word);
         seenTagTrigrams.add(makeTrigramString(labeledLocalTrigramContext.getPreviousPreviousTag(), labeledLocalTrigramContext.getPreviousTag(), labeledLocalTrigramContext.getCurrentTag()));
       }
+
+      for (String tag : tagToWordCounters.keySet()) {
+        tagToWordCounters.incrementCount(tag, UNKNOWN_WORD, 1.0);
+      }
+
+      tagToWordCounters = Counters.conditionalNormalize(tagToWordCounters);
       tagTrigramCounters = Counters.conditionalNormalize(tagTrigramCounters);
       unknownWordTags = Counters.normalize(unknownWordTags);
     }
