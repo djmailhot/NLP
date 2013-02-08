@@ -688,13 +688,11 @@ public class POSTaggerTester {
         if (seenWords.contains(word)) {
           emission = wordCounter.getCount(word);
         } else {
-          int i = Math.min(2, word.length());
-          while (i >= 0 && emission == 0.0) {
-            String suffix = word.substring(word.length() - i, word.length());
-            emission = tagToSuffixCounters.getCount(tag, suffix);
-  //System.out.println(suffix + " ::: "+ wordCounter.getCount(word) + " ---- " +emission);
-            i--;
-          }
+          // if you don't cut off part of the word, you are effectively using the complete unknown word
+          int suffixLength = Math.min(3, word.length() - 1);
+          String suffix = word.substring(word.length() - suffixLength, word.length());
+          emission = tagToSuffixCounters.getCount(tag, suffix);
+//System.out.println(suffix + " ::: "+ wordCounter.getCount(word) + " ---- " +emission);
         }
 
         // make sure to never Log a value of zero
@@ -727,25 +725,18 @@ public class POSTaggerTester {
         tagTrigramCounters.incrementCount(tagBigram, tag, 1.0);
         tagFrequencies.incrementCount(tag, 1.0);
 
+        // P(T | ln-i, ... ln)
+        // keep track of tag counts conditioned on suffixes of different length
+        int suffixLength = Math.min(word.length(), MAX_SUFFIX_LENGTH);
+        for (int i = 0; i <= suffixLength; i++) {
+          String suffix = word.substring(word.length() - i, word.length());
+          suffixToTagCounters.incrementCount(suffix, tag, 1.0);
+          suffixFrequencies.incrementCount(suffix, 1.0);
+        }
+
         seenWords.add(word);
       }
 
-      // 
-      for (String tag : tagToWordCounters.keySet()) {
-        Counter<String> wordCounter = tagToWordCounters.getCounter(tag);
-        for (String word : wordCounter.keySet()) {
-          if (wordCounter.getCount(word) <= RARE_WORD_COUNT_THRESHOLD) {
-            // P(T | ln-i, ... ln)
-            // keep track of tag counts conditioned on suffixes of different length
-            int suffixLength = Math.min(word.length(), MAX_SUFFIX_LENGTH);
-            for (int i = 0; i <= suffixLength; i++) {
-              String suffix = word.substring(word.length() - i, word.length());
-              suffixToTagCounters.incrementCount(suffix, tag, 1.0);
-              suffixFrequencies.incrementCount(suffix, 1.0);
-            }
-          }
-        }
-      }
       
       // Turn this into a probability distribution
       tagFrequencies = Counters.normalize(tagFrequencies);
