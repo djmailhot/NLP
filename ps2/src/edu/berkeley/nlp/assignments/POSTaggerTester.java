@@ -633,7 +633,6 @@ public class POSTaggerTester {
 
     private static int MAX_SUFFIX_LENGTH = 5;
     private static int RARE_WORD_COUNT_THRESHOLD = 10;
-    private static int UNKNOWN_SUFFIX_LENGTH = 4;
 
     boolean restrictTrigrams; // if true, assign log score of Double.NEGATIVE_INFINITY to illegal tag trigrams.
 
@@ -685,13 +684,17 @@ public class POSTaggerTester {
         
         // score = probability of seeing this tag after the previous 2 tags * probability of seeing the current word given this tag
         double transition = trigramCounter.getCount(tag);
-        double emission;
+        double emission = 0.0;
         if (seenWords.contains(word)) {
           emission = wordCounter.getCount(word);
         } else {
-          String suffix = word.substring(word.length() - Math.min(UNKNOWN_SUFFIX_LENGTH, word.length()), word.length());
-          emission = tagToSuffixCounters.getCount(tag, suffix);
-//System.out.println(suffix + " ::: "+ wordCounter.getCount(word) + " ---- " +emission);
+          int i = Math.min(MAX_SUFFIX_LENGTH, word.length());
+          while (i >= 0 && emission == 0.0) {
+            String suffix = word.substring(word.length() - i, word.length());
+            emission = tagToSuffixCounters.getCount(tag, suffix);
+  //System.out.println(suffix + " ::: "+ wordCounter.getCount(word) + " ---- " +emission);
+            i--;
+          }
         }
 
         // make sure to never Log a value of zero
