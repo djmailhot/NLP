@@ -688,7 +688,7 @@ public class POSTaggerTester {
         if (seenWords.contains(word)) {
           emission = wordCounter.getCount(word);
         } else {
-          int i = Math.min(MAX_SUFFIX_LENGTH, word.length());
+          int i = Math.min(2, word.length());
           while (i >= 0 && emission == 0.0) {
             String suffix = word.substring(word.length() - i, word.length());
             emission = tagToSuffixCounters.getCount(tag, suffix);
