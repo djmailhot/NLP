@@ -6,6 +6,7 @@ import edu.berkeley.nlp.ling.Trees;
 import edu.berkeley.nlp.util.*;
 
 import java.util.*;
+import java.util.PriorityQueue;
 
 /**
  * @author Dan Klein
@@ -305,7 +306,7 @@ public class POSTaggerTester {
 
         // for each previous state, where a state is a tag bigram (w,u)
         for (S prevState : prevTransitions.keySet()) {
-          // find the max score for the expression score(k-1, w, u) * HMM score function
+          // find the max score for the expression score(k1, w, u) * HMM score function
           // in practice, that means we'll have to convert the HMM scores by the following Math.exp(transitions.argMax())
           // pi(k,u,v) = max(pi(k-1,u,v)*q(v|w,u)*e(x|v))
           
@@ -330,9 +331,9 @@ public class POSTaggerTester {
             }
           }
         }
-        System.out.print(k+"~");
+//System.out.print(k+"~");
       }
-      System.out.println("done");
+//System.out.println("done");
 
       // backsolve the OPT array
       List<S> states = new ArrayList<S>();
@@ -345,7 +346,7 @@ public class POSTaggerTester {
         i--;
       }
       Collections.reverse(states);
-      //System.out.println(states);
+//System.out.println(states);
       return states;
     }
 
@@ -630,16 +631,21 @@ public class POSTaggerTester {
    */
   static class TrigramHMMScorer implements LocalTrigramScorer {
 
-    public static final String TAG_UNKNOWN = "<UNK>";
+    private static int MAX_SUFFIX_LENGTH = 5;
+    private static int RARE_WORD_COUNT_THRESHOLD = 10;
+    private static int UNKNOWN_SUFFIX_LENGTH = 4;
 
     boolean restrictTrigrams; // if true, assign log score of Double.NEGATIVE_INFINITY to illegal tag trigrams.
 
     // maps a tag to a word counter for words seen marked with that tag
     CounterMap<String, String> tagToWordCounters = new CounterMap<String, String>();
     CounterMap<String, String> tagTrigramCounters = new CounterMap<String, String>();
-    Counter<String> unknownWordTags = new Counter<String>();
+    CounterMap<String, String> tagToSuffixCounters = new CounterMap<String, String>();
+    Counter<String> suffixFrequencies = new Counter<String>();
+    Counter<String> tagFrequencies = new Counter<String>();
     Set<String> seenTagTrigrams = new HashSet<String>();
     Set<String> seenWords = new HashSet<String>();
+    double thetaWeight = 0.0;
 
     public int getHistorySize() {
       return 2;
@@ -653,7 +659,6 @@ public class POSTaggerTester {
     public Counter<String> getLogScoreCounter(LocalTrigramContext localTrigramContext) {
       int position = localTrigramContext.getPosition();
       String word = localTrigramContext.getWords().get(position);
-      word = (seenWords.contains(word)) ? word : UNKNOWN_WORD;
 
       // get the 2 previous tags for this context
       String tagBigram = makeBigramString(localTrigramContext.getPreviousPreviousTag(), localTrigramContext.getPreviousTag());
@@ -671,7 +676,6 @@ public class POSTaggerTester {
         possibleNextTags = trigramCounter.keySet();
       }
 
-      Set<String> allowedFollowingTags = allowedFollowingTags(tagToWordCounters.keySet(), localTrigramContext.getPreviousPreviousTag(), localTrigramContext.getPreviousTag());
       Counter<String> tagScoreCounter = new Counter<String>();
       // for each possible next tag, calculate a score
       for (String tag : possibleNextTags) {
@@ -681,27 +685,22 @@ public class POSTaggerTester {
         
         // score = probability of seeing this tag after the previous 2 tags * probability of seeing the current word given this tag
         double transition = trigramCounter.getCount(tag);
-        double emission = wordCounter.getCount(word);
+        double emission;
+        if (seenWords.contains(word)) {
+          emission = wordCounter.getCount(word);
+        } else {
+          String suffix = word.substring(word.length() - Math.min(UNKNOWN_SUFFIX_LENGTH, word.length()), word.length());
+          emission = tagToSuffixCounters.getCount(tag, suffix);
+//System.out.println(suffix + " ::: "+ wordCounter.getCount(word) + " ---- " +emission);
+        }
 
         // make sure to never Log a value of zero
         transition = Math.log( (transition > 0) ? transition : Double.MIN_VALUE );
         emission = Math.log( (emission > 0) ? emission : Double.MIN_VALUE );
 
-        //if (!restrictTrigrams || allowedFollowingTags.isEmpty() || allowedFollowingTags.contains(tag))
-          tagScoreCounter.setCount(tag, (transition + emission) );
+        tagScoreCounter.setCount(tag, (transition + emission) );
       }
       return tagScoreCounter;
-    }
-
-    private Set<String> allowedFollowingTags(Set<String> tags, String previousPreviousTag, String previousTag) {
-      Set<String> allowedTags = new HashSet<String>();
-      for (String tag : tags) {
-        String trigramString = makeTrigramString(previousPreviousTag, previousTag, tag);
-        if (seenTagTrigrams.contains((trigramString))) {
-          allowedTags.add(tag);
-        }
-      }
-      return allowedTags;
     }
 
     private String makeTrigramString(String previousPreviousTag, String previousTag, String currentTag) {
@@ -713,6 +712,8 @@ public class POSTaggerTester {
     }
 
     public void train(List<LabeledLocalTrigramContext> labeledLocalTrigramContexts) {
+      CounterMap<String, String> suffixToTagCounters = new CounterMap<String, String>();
+
       // collect word-tag counts
       for (LabeledLocalTrigramContext labeledLocalTrigramContext : labeledLocalTrigramContexts) {
         String word = labeledLocalTrigramContext.getCurrentWord();
@@ -721,18 +722,97 @@ public class POSTaggerTester {
 
         tagToWordCounters.incrementCount(tag, word, 1.0);
         tagTrigramCounters.incrementCount(tagBigram, tag, 1.0);
+        tagFrequencies.incrementCount(tag, 1.0);
 
         seenWords.add(word);
-        seenTagTrigrams.add(makeTrigramString(labeledLocalTrigramContext.getPreviousPreviousTag(), labeledLocalTrigramContext.getPreviousTag(), labeledLocalTrigramContext.getCurrentTag()));
       }
 
+      // 
       for (String tag : tagToWordCounters.keySet()) {
-        tagToWordCounters.incrementCount(tag, UNKNOWN_WORD, 1.0);
+        Counter<String> wordCounter = tagToWordCounters.getCounter(tag);
+        for (String word : wordCounter.keySet()) {
+          if (wordCounter.getCount(word) <= RARE_WORD_COUNT_THRESHOLD) {
+            // P(T | ln-i, ... ln)
+            // keep track of tag counts conditioned on suffixes of different length
+            int suffixLength = Math.min(word.length(), MAX_SUFFIX_LENGTH);
+            for (int i = 0; i <= suffixLength; i++) {
+              String suffix = word.substring(word.length() - i, word.length());
+              suffixToTagCounters.incrementCount(suffix, tag, 1.0);
+              suffixFrequencies.incrementCount(suffix, 1.0);
+            }
+          }
+        }
+      }
+      
+      // Turn this into a probability distribution
+      tagFrequencies = Counters.normalize(tagFrequencies);
+      suffixFrequencies = Counters.normalize(suffixFrequencies);
+      suffixToTagCounters = Counters.conditionalNormalize(suffixToTagCounters);
+
+      // calculate theta weight for recursive suffix smoothing
+      double freqSum = 0.0;
+      double tagFreqAvg = 1.0 / tagFrequencies.size();
+      for (String tag : tagFrequencies.keySet()) {
+        freqSum += Math.pow((tagFrequencies.getCount(tag) - tagFreqAvg), 2.0);
+      }
+      thetaWeight = freqSum / (tagFrequencies.size() - 1);
+      
+      // prepare to smooth the suffix distributions
+      Queue<String> sortedSuffixes = new PriorityQueue<String>(
+        suffixToTagCounters.keySet().size(),
+        new Comparator<String>() {
+          @Override
+          // shortest suffix first
+          public int compare(String s1, String s2) {
+            return s1.length() - s2.length();
+          }
+        }
+      );
+      sortedSuffixes.addAll(suffixToTagCounters.keySet());
+
+      // actually smooth the suffix distributions
+      CounterMap<String, String> smoothedSuffixToTagCounters = new CounterMap<String, String>();
+      while (!sortedSuffixes.isEmpty()) {
+        String suffix = sortedSuffixes.poll();
+        Counter<String> oldTagCounter = suffixToTagCounters.getCounter(suffix);
+
+        // a suffix of one letter less
+        String preSuffix = (suffix.length() > 1) ? suffix.substring(1, suffix.length()) : null;
+        
+        for (String tag : oldTagCounter.keySet()) {
+
+          if (preSuffix == null) {
+            // we have no suffix, set it to an initialization value (the frequency)
+            smoothedSuffixToTagCounters.setCount(suffix, tag, tagFrequencies.getCount(tag));
+          } else {
+            // calculate a smoothed score
+            double smoothedScore = oldTagCounter.getCount(tag);
+            smoothedScore += (thetaWeight * smoothedSuffixToTagCounters.getCount(preSuffix, tag));
+            smoothedScore /= (1 + thetaWeight);
+            smoothedSuffixToTagCounters.setCount(suffix, tag, smoothedScore);
+          }
+        }
+      }
+      suffixToTagCounters = smoothedSuffixToTagCounters;
+      smoothedSuffixToTagCounters = null;
+
+      // want our distribution to be P(suffix | tag)
+      // however, suffixToTagCounters represents P(tag | suffix)
+      // so we have to use bayes rule
+      for (String suffix : suffixToTagCounters.keySet()) {
+        Counter<String> tagCounter = suffixToTagCounters.getCounter(suffix);
+        for (String tag : tagCounter.keySet()) {
+          double bayesResult = tagCounter.getCount(tag);
+          bayesResult *= suffixFrequencies.getCount(suffix);
+          bayesResult /= tagFrequencies.getCount(tag);
+
+          tagToSuffixCounters.setCount(tag, suffix, bayesResult);
+        }
       }
 
+      tagToSuffixCounters = Counters.conditionalNormalize(tagToSuffixCounters);
       tagToWordCounters = Counters.conditionalNormalize(tagToWordCounters);
       tagTrigramCounters = Counters.conditionalNormalize(tagTrigramCounters);
-      unknownWordTags = Counters.normalize(unknownWordTags);
     }
 
     public void validate(List<LabeledLocalTrigramContext> labeledLocalTrigramContexts) {
