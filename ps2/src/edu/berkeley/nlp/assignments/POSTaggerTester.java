@@ -689,7 +689,7 @@ public class POSTaggerTester {
           emission = wordCounter.getCount(word);
         } else {
           // if you don't cut off part of the word, you are effectively using the complete unknown word
-          int suffixLength = Math.min(3, word.length() - 1);
+          int suffixLength = Math.min(2, word.length() - 1);
           String suffix = word.substring(word.length() - suffixLength, word.length());
           emission = tagToSuffixCounters.getCount(tag, suffix);
 //System.out.println(suffix + " ::: "+ wordCounter.getCount(word) + " ---- " +emission);
