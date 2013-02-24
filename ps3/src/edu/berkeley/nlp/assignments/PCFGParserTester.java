@@ -174,10 +174,10 @@ System.out.println(sentence);
           double score = lexicon.scoreTagging(word, tag);
           if (score > 0) {
             terminalCounter.setCount(tag, score);
-            UnaryRule unaryRule = new UnaryRule(tag, word);
-            unaryRule.setScore(score);
+            TerminalRule terminalRule = new TerminalRule(tag, word);
+            terminalRule.setScore(score);
 
-            backPointerMap.put(tag, new Pair(unaryRule, -1));
+            backPointerMap.put(tag, new Pair(terminalRule, -1));
           }
         }
         //Counters.normalize(terminalCounter);
@@ -187,8 +187,8 @@ System.out.println(sentence);
         backPointers[i][i+1] = backPointerMap;
       }
 
-System.out.println(Arrays.deepToString(opt));
-System.out.println(Arrays.deepToString(backPointers));
+//System.out.println(Arrays.deepToString(opt));
+//System.out.println(Arrays.deepToString(backPointers));
 
       //  Algorithm:
       //  For l = 1 . . .(n − 1)
@@ -202,44 +202,49 @@ System.out.println(Arrays.deepToString(backPointers));
 
           Counter<String> optCounter = (opt[i][j] != null) ? opt[i][j] : new Counter<String>();
           Map<String, Pair<NaryRule, Integer>> backPointerMap = (backPointers[i][j] != null) ? backPointers[i][j] : new HashMap<String, Pair<NaryRule, Integer>>();
+          opt[i][j] = optCounter;
+          backPointers[i][j] = backPointerMap;
 
-          Set<String> leftTags = new HashSet<String>();
-          leftTags.addAll(opt[i][i+1].keySet());
-          //  For all X ∈ N, calculate
-          //for (String rootTag : lexicon.getAllTags()) { // O(n^2 * N)
-          for (String leftTag : leftTags) { // O(n^2 * N)
+          // test sets of bigrams, divided by the split index
+          int split = i + 1;
+          while (split < j) { // O(n^3 * N * R)
+
+            //  For all Y ∈ N, calculate
             //  π(i, j, X) = max X→Y Z∈R, s∈{i...(j−1)}
             //  (q(X → Y Z) × π(i, s, Y ) × π(s + 1, j, Z))
+            Set<String> leftTags = new HashSet<String>();
+            leftTags.addAll(opt[i][split].keySet());
+            for (String leftTag : leftTags) { // O(n^2 * N)
 
+              //  bp(i, j, X) = arg max
+              //  X→Y Z∈R,
+              //  s∈{i...(j−1)}
 
-            //  bp(i, j, X) = arg max
-            //  X→Y Z∈R,
-            //  s∈{i...(j−1)}
-
-            if (i + 1 < j) {
               //for (BinaryRule binaryRule : grammar.getBinaryRulesByParent(rootTag)) { // O(n^2 * N * R)
               for (BinaryRule binaryRule : grammar.getBinaryRulesByLeftChild(leftTag)) { // O(n^2 * N * R)
                 String parent = binaryRule.getParent();
 
-                int split = i + 1;
-                while (split < j) { // O(n^3 * N * R)
 
-                  //  (q(X → Y Z) × π(i, s, Y ) × π(s + 1, j, Z))
-                  double score = binaryRule.getScore() * opt[i][split].getCount(binaryRule.getLeftChild()) * opt[split][j].getCount(binaryRule.getRightChild());
-                  
-                  if (score > optCounter.getCount(parent)) {
-                    optCounter.setCount(parent, score);
-                    backPointerMap.put(parent, new Pair<NaryRule, Integer>(binaryRule, split));
-                  }
-                  split++;
+                //  (q(X → Y Z) × π(i, s, Y ) × π(s + 1, j, Z))
+                double score = binaryRule.getScore() * opt[i][split].getCount(binaryRule.getLeftChild()) * opt[split][j].getCount(binaryRule.getRightChild());
+                
+                if (score > optCounter.getCount(parent)) {
+                  optCounter.setCount(parent, score);
+                  backPointerMap.put(parent, new Pair<NaryRule, Integer>(binaryRule, split));
                 }
-
               }
             }
+            split++;
+          }
 
-            // include all UnaryRule possibilities with this left tag as a Unary child
+          // include all UnaryRule possibilities with this left tag as a Unary child
+          //  π(i, j, X) = max X→Y ∈R, s∈{i...(j−1)}
+          //  (q(X → Y) × π(i, s, Y ))
+          Set<String> rootTags = new HashSet<String>();
+          rootTags.addAll(opt[i][j].keySet());
+          for (String rootTag : rootTags) {
             //for (UnaryRule unaryRule : grammar.getUnaryRulesByParent(rootTag)) {
-            for (UnaryRule unaryRule : unaryClosure.getClosedUnaryRulesByChild(leftTag)) {
+            for (UnaryRule unaryRule : unaryClosure.getClosedUnaryRulesByChild(rootTag)) {
             //for (UnaryRule unaryRule : unaryClosure.getClosedUnaryRulesByParent(rootTag)) {
               String parent = unaryRule.getParent();
 
@@ -249,38 +254,42 @@ System.out.println(Arrays.deepToString(backPointers));
                 backPointerMap.put(parent, new Pair<NaryRule, Integer>(unaryRule, i));
               }
             }
-
           }
 
           //Counters.normalize(optCounter);
-          opt[i][j] = optCounter;
-          backPointers[i][j] = backPointerMap;
           i++;
-          //System.out.println(Arrays.deepToString(opt));
-          //System.out.println(Arrays.deepToString(backPointers));
+//         System.out.println(Arrays.deepToString(opt));
+//         System.out.println(Arrays.deepToString(backPointers));
         }
         diff++;
       }
 
-//System.out.println(Arrays.deepToString(opt));
-//System.out.println(Arrays.deepToString(backPointers));
+/*
+for (int i=0; i < opt.length; i++) {
+  for (int j=0; j < opt[i].length; j++) {
+    System.out.println((opt[i][j]));
+  }
+}
+for (int i=0; i < backPointers.length; i++) {
+  for (int j=0; j < opt[i].length; j++) {
+    System.out.println((backPointers[i][j]));
+  }
+}
+*/
 
       String overallRoot = opt[0][n].argMax();
 
       List<Tree<String>> children = new ArrayList<Tree<String>>();
-      children.add(buildOptimalParse(overallRoot, 0, n, backPointers));
+      children.add(buildOptimalParse(overallRoot, 0, n, sentence, backPointers));
       Tree<String> annotatedBestParse = new Tree("ROOT", children);
 
       return TreeAnnotations.unAnnotateTree(annotatedBestParse);
     }
 
-    private Tree<String> buildOptimalParse(String rootTag, int i, int j, Map<String, Pair<NaryRule, Integer>>[][] backPointers) {
+    private Tree<String> buildOptimalParse(String rootTag, int i, int j, List<String> sentence, Map<String, Pair<NaryRule, Integer>>[][] backPointers) {
       System.out.println(rootTag);
       if (rootTag == null || i > j) {
         return null;
-      } else if (!backPointers[i][j].containsKey(rootTag)) {
-        // We've reached a terminal tag
-        return new Tree<String>(rootTag);
       } else {
         // We branch on a nonterminal tag
         List<Tree<String>> children = new ArrayList<Tree<String>>();
@@ -288,17 +297,21 @@ System.out.println(Arrays.deepToString(backPointers));
         Pair<NaryRule, Integer> optimalSplit = backPointers[i][j].get(rootTag);
         NaryRule rule = optimalSplit.getFirst();
 
-        if (rule instanceof UnaryRule) {
+        if (rule instanceof TerminalRule) {
+          // We've reached a terminal tag
+          TerminalRule terminalRule = (TerminalRule)rule;
+          children.add(new Tree<String>(terminalRule.getTerminal()));
+        } else if (rule instanceof UnaryRule) {
           // if a unary rule
           UnaryRule unaryRule = (UnaryRule)rule;
-          children.add(buildOptimalParse(unaryRule.getChild(), i, j, backPointers));
+          children.add(buildOptimalParse(unaryRule.getChild(), i, j, sentence, backPointers));
         } else if (rule instanceof BinaryRule) {
           // if a binary rule
           BinaryRule binaryRule = (BinaryRule)rule;
           int split = optimalSplit.getSecond();
 
-          children.add(buildOptimalParse(binaryRule.getLeftChild(), i, split, backPointers));
-          children.add(buildOptimalParse(binaryRule.getRightChild(), split + 1, j, backPointers));
+          children.add(buildOptimalParse(binaryRule.getLeftChild(), i, split, sentence, backPointers));
+          children.add(buildOptimalParse(binaryRule.getRightChild(), split, j, sentence, backPointers));
         }
 
         return new Tree<String>(rootTag, children);
@@ -632,24 +645,10 @@ System.out.println(Arrays.deepToString(backPointers));
   }
 
   static class UnaryRule extends NaryRule {
-    String parent;
     String child;
-    double score;
-
-    public String getParent() {
-      return parent;
-    }
 
     public String getChild() {
       return child;
-    }
-
-    public double getScore() {
-      return score;
-    }
-
-    public void setScore(double score) {
-      this.score = score;
     }
 
     public boolean equals(Object o) {
@@ -678,6 +677,42 @@ System.out.println(Arrays.deepToString(backPointers));
     public UnaryRule(String parent, String child) {
       this.parent = parent;
       this.child = child;
+    }
+  }
+
+  static class TerminalRule extends NaryRule {
+    String terminal;
+
+    public String getTerminal() {
+      return terminal;
+    }
+
+    public boolean equals(Object o) {
+      if (this == o) return true;
+      if (!(o instanceof TerminalRule)) return false;
+
+      final TerminalRule terminalRule = (TerminalRule) o;
+
+      if (terminal != null ? !terminal.equals(terminalRule.terminal) : terminalRule.terminal != null) return false;
+      if (parent != null ? !parent.equals(terminalRule.parent) : terminalRule.parent != null) return false;
+
+      return true;
+    }
+
+    public int hashCode() {
+      int result;
+      result = (parent != null ? parent.hashCode() : 0);
+      result = 29 * result + (terminal != null ? terminal.hashCode() : 0);
+      return result;
+    }
+
+    public String toString() {
+      return parent + " -> " + terminal + " %% " + score;
+    }
+
+    public TerminalRule(String parent, String terminal) {
+      this.parent = parent;
+      this.terminal = terminal;
     }
   }
 
@@ -832,7 +867,7 @@ System.out.println(Arrays.deepToString(backPointers));
     //int maxTrainLength = 1000;
     int maxTrainLength = 1000;
     //int maxTestLength = 40;
-    int maxTestLength = 2;
+    int maxTestLength = 20;
 
     // Update defaults using command line specifications
     if (argMap.containsKey("-path")) {
