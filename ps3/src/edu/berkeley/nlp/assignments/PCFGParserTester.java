@@ -14,6 +14,9 @@ import java.util.*;
  * @author Dan Klein
  */
 public class PCFGParserTester {
+  public static final String ROOT_POS_TAG = "ROOT";
+  public static final int HORZ_ORDER_MARKOVIZATION = 2;
+  public static final int VERT_ORDER_MARKOVIZATION = 2;
 
   /**
    * Parsers are required to map sentences to trees.  How a parser is constructed and trained is not specified.
@@ -180,7 +183,6 @@ System.out.println(sentence);
             backPointerMap.put(tag, new Pair(terminalRule, -1));
           }
         }
-        //Counters.normalize(terminalCounter);
 
         // a single token, between index i (inclusive) and i+1 exclusive
         opt[i][i+1] = terminalCounter;
@@ -256,7 +258,6 @@ System.out.println(sentence);
             }
           }
 
-          //Counters.normalize(optCounter);
           i++;
 //         System.out.println(Arrays.deepToString(opt));
 //         System.out.println(Arrays.deepToString(backPointers));
@@ -276,12 +277,20 @@ for (int i=0; i < backPointers.length; i++) {
   }
 }
 */
+      // calculate the overall score of the parse tree when starting with the ROOT tag
+      Counter<String> rootCounter = opt[0][n];
+      Map<String, Pair<NaryRule, Integer>> rootBackPointerMap = backPointers[0][n];
+      for (UnaryRule unaryRule : grammar.getUnaryRulesByParent(ROOT_POS_TAG)) {
+        String parent = unaryRule.getParent();
 
-      String overallRoot = opt[0][n].argMax();
+        double score = unaryRule.getScore() * rootCounter.getCount(unaryRule.getChild());
+        if (score > rootCounter.getCount(parent)) {
+          rootCounter.setCount(parent, score);
+          rootBackPointerMap.put(parent, new Pair<NaryRule, Integer>(unaryRule, 0));
+        }
+      }
 
-      List<Tree<String>> children = new ArrayList<Tree<String>>();
-      children.add(buildOptimalParse(overallRoot, 0, n, sentence, backPointers));
-      Tree<String> annotatedBestParse = new Tree("ROOT", children);
+      Tree<String> annotatedBestParse = buildOptimalParse(ROOT_POS_TAG, 0, n, sentence, backPointers);
 
       return TreeAnnotations.unAnnotateTree(annotatedBestParse);
     }
@@ -292,7 +301,7 @@ for (int i=0; i < backPointers.length; i++) {
         return null;
       } else {
         // We branch on a nonterminal tag
-        List<Tree<String>> children = new ArrayList<Tree<String>>();
+        List<Tree<String>> children = null;
 
         Pair<NaryRule, Integer> optimalSplit = backPointers[i][j].get(rootTag);
         NaryRule rule = optimalSplit.getFirst();
@@ -300,16 +309,17 @@ for (int i=0; i < backPointers.length; i++) {
         if (rule instanceof TerminalRule) {
           // We've reached a terminal tag
           TerminalRule terminalRule = (TerminalRule)rule;
-          children.add(new Tree<String>(terminalRule.getTerminal()));
+          children = Collections.singletonList(new Tree<String>(terminalRule.getTerminal()));
         } else if (rule instanceof UnaryRule) {
           // if a unary rule
           UnaryRule unaryRule = (UnaryRule)rule;
-          children.add(buildOptimalParse(unaryRule.getChild(), i, j, sentence, backPointers));
+          children = Collections.singletonList(buildOptimalParse(unaryRule.getChild(), i, j, sentence, backPointers));
         } else if (rule instanceof BinaryRule) {
           // if a binary rule
           BinaryRule binaryRule = (BinaryRule)rule;
           int split = optimalSplit.getSecond();
 
+          children = new ArrayList<Tree<String>>();
           children.add(buildOptimalParse(binaryRule.getLeftChild(), i, split, sentence, backPointers));
           children.add(buildOptimalParse(binaryRule.getRightChild(), split, j, sentence, backPointers));
         }
@@ -350,33 +360,67 @@ for (int i=0; i < backPointers.length; i++) {
   static class TreeAnnotations {
     public static Tree<String> annotateTree(Tree<String> unAnnotatedTree) {
       // Currently, the only annotation done is a lossless binarization
-      // TODO : change the annotation from a lossless binarization to a finite-order markov process (try at least 1st and 2nd order)
-      // TODO : mark nodes with the label of their parent nodes, giving a second order vertical markov process
-      return binarizeTree(unAnnotatedTree);
+      List<String> verticalLabelList = new ArrayList<String>();
+      verticalLabelList.add(ROOT_POS_TAG);
+      return binarizeTree(unAnnotatedTree, verticalLabelList);
     }
 
-    private static Tree<String> binarizeTree(Tree<String> tree) {
+    private static Tree<String> binarizeTree(Tree<String> tree, List<String> verticalLabelList) {
       String label = tree.getLabel();
       if (tree.isLeaf())
         return new Tree<String>(label);
       if (tree.getChildren().size() == 1) {
-        return new Tree<String>(label, Collections.singletonList(binarizeTree(tree.getChildren().get(0))));
+        return new Tree<String>(label, Collections.singletonList(binarizeTree(tree.getChildren().get(0), verticalLabelList)));
       }
       // otherwise, it's a binary-or-more local tree, so decompose it into a sequence of binary and unary trees.
-      String intermediateLabel = "@" + label + "->";
-      Tree<String> intermediateTree = binarizeTreeHelper(tree, 0, intermediateLabel);
+
+      // # of children is guaranteed to be >= 2
+      List<String> horizontalLabelList = new ArrayList<String>();
+      verticalLabelList.add(label);
+      Tree<String> intermediateTree = binarizeTreeHelper(tree, 0, horizontalLabelList, verticalLabelList);
+      verticalLabelList.remove(verticalLabelList.size() - 1);
       return new Tree<String>(label, intermediateTree.getChildren());
     }
 
-    private static Tree<String> binarizeTreeHelper(Tree<String> tree, int numChildrenGenerated, String intermediateLabel) {
+    private static Tree<String> binarizeTreeHelper(Tree<String> tree, int numChildrenGenerated, List<String> horizontalLabelList, List<String> verticalLabelList) {
       Tree<String> leftTree = tree.getChildren().get(numChildrenGenerated);
       List<Tree<String>> children = new ArrayList<Tree<String>>();
-      children.add(binarizeTree(leftTree));
+      children.add(binarizeTree(leftTree, verticalLabelList));
       if (numChildrenGenerated < tree.getChildren().size() - 1) {
-        Tree<String> rightTree = binarizeTreeHelper(tree, numChildrenGenerated + 1, intermediateLabel + "_" + leftTree.getLabel());
+        horizontalLabelList.add(leftTree.getLabel());
+        Tree<String> rightTree = binarizeTreeHelper(tree, numChildrenGenerated + 1, horizontalLabelList, verticalLabelList);
         children.add(rightTree);
       }
-      return new Tree<String>(intermediateLabel, children);
+
+      String horizontalLabel = "@" + getVerticallyMarkovizedTreeLabel(verticalLabelList) + "->";
+      // include a intermediate label that adheres to a specified Nth-order horzontal markovization
+      int numLabels = Math.min(horizontalLabelList.size(), HORZ_ORDER_MARKOVIZATION);
+
+      // how many labels deep are we?
+      if (numChildrenGenerated <= numLabels) {
+        // include all labels in the list
+        for (int i = 0; i < numChildrenGenerated; i++) {
+          horizontalLabel += "_" + horizontalLabelList.get(i);
+        }
+      } else {
+        // include only the last number of labels
+        int startIndex = numChildrenGenerated - numLabels;
+        horizontalLabel += "..." + horizontalLabelList.get(startIndex);
+        for (int i = startIndex + 1; i < numChildrenGenerated; i++) {
+          horizontalLabel += "_" + horizontalLabelList.get(i);
+        }
+      }
+
+      return new Tree<String>(horizontalLabel, children);
+    }
+
+    private static String getVerticallyMarkovizedTreeLabel(List<String> verticalLabelList) {
+      String verticalLabel = verticalLabelList.get(verticalLabelList.size() - 1);
+      int numLabels = Math.min(verticalLabelList.size(), VERT_ORDER_MARKOVIZATION);
+      for (int i = 0; i < numLabels - 1; i++) {
+        verticalLabel += "^" + verticalLabelList.get(verticalLabelList.size() - (i + 2));
+      }
+      return verticalLabel;
     }
 
     public static Tree<String> unAnnotateTree(Tree<String> annotatedTree) {
@@ -867,7 +911,7 @@ for (int i=0; i < backPointers.length; i++) {
     //int maxTrainLength = 1000;
     int maxTrainLength = 1000;
     //int maxTestLength = 40;
-    int maxTestLength = 20;
+    int maxTestLength = 10;
 
     // Update defaults using command line specifications
     if (argMap.containsKey("-path")) {
