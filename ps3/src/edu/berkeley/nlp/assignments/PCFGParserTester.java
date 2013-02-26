@@ -18,6 +18,10 @@ public class PCFGParserTester {
   public static final int HORZ_ORDER_MARKOVIZATION = 2;
   public static final int VERT_ORDER_MARKOVIZATION = 2;
 
+  public static boolean markovization = false;
+  public static boolean splitPreterminals = false;
+  public static boolean splitUnaryRewrites = false;
+
   /**
    * Parsers are required to map sentences to trees.  How a parser is constructed and trained is not specified.
    */
@@ -362,65 +366,65 @@ for (int i=0; i < backPointers.length; i++) {
       // Currently, the only annotation done is a lossless binarization
       List<String> verticalLabelList = new ArrayList<String>();
       verticalLabelList.add(ROOT_POS_TAG);
-      return binarizeTree(unAnnotatedTree, verticalLabelList);
+      Tree<String> tree = binarizeTree(unAnnotatedTree, ROOT_POS_TAG);
+      System.out.println(Trees.PennTreeRenderer.render(tree));
+      return tree;
     }
 
-    private static Tree<String> binarizeTree(Tree<String> tree, List<String> verticalLabelList) {
+    private static Tree<String> binarizeTree(Tree<String> tree, String verticalLabel) {
       String label = tree.getLabel();
       if (tree.isLeaf())
         return new Tree<String>(label);
-      if (tree.getChildren().size() == 1) {
-        return new Tree<String>(label, Collections.singletonList(binarizeTree(tree.getChildren().get(0), verticalLabelList)));
+      if (!splitPreterminals && tree.getChildren().size() == 1 && tree.getChildren().get(0).isLeaf()) {
+        return new Tree<String>(label, Collections.singletonList(binarizeTree(tree.getChildren().get(0), label)));
       }
       // otherwise, it's a binary-or-more local tree, so decompose it into a sequence of binary and unary trees.
 
       // # of children is guaranteed to be >= 2
       List<String> horizontalLabelList = new ArrayList<String>();
-      verticalLabelList.add(label);
-      Tree<String> intermediateTree = binarizeTreeHelper(tree, 0, horizontalLabelList, verticalLabelList);
-      verticalLabelList.remove(verticalLabelList.size() - 1);
+      Tree<String> intermediateTree = binarizeTreeHelper(tree, 0, horizontalLabelList, verticalLabel);
       return new Tree<String>(label, intermediateTree.getChildren());
     }
 
-    private static Tree<String> binarizeTreeHelper(Tree<String> tree, int numChildrenGenerated, List<String> horizontalLabelList, List<String> verticalLabelList) {
+    private static Tree<String> binarizeTreeHelper(Tree<String> tree, int numChildrenGenerated, List<String> horizontalLabelList, String verticalLabel) {
       Tree<String> leftTree = tree.getChildren().get(numChildrenGenerated);
       List<Tree<String>> children = new ArrayList<Tree<String>>();
-      children.add(binarizeTree(leftTree, verticalLabelList));
+      children.add(binarizeTree(leftTree, tree.getLabel()));
       if (numChildrenGenerated < tree.getChildren().size() - 1) {
         horizontalLabelList.add(leftTree.getLabel());
-        Tree<String> rightTree = binarizeTreeHelper(tree, numChildrenGenerated + 1, horizontalLabelList, verticalLabelList);
+        Tree<String> rightTree = binarizeTreeHelper(tree, numChildrenGenerated + 1, horizontalLabelList, verticalLabel);
         children.add(rightTree);
       }
 
-      String horizontalLabel = "@" + getVerticallyMarkovizedTreeLabel(verticalLabelList) + "->";
       // include a intermediate label that adheres to a specified Nth-order horzontal markovization
-      int numLabels = Math.min(horizontalLabelList.size(), HORZ_ORDER_MARKOVIZATION);
+      String label = "@" + tree.getLabel();
+
+      // Add label splits
+
+      if (splitUnaryRewrites && tree.getChildren().size() == 1) {
+        label += "-U";
+      }
+
+      label = addVerticalMarkovization(label, verticalLabel);
+
 
       // how many labels deep are we?
-      if (numChildrenGenerated <= numLabels) {
-        // include all labels in the list
-        for (int i = 0; i < numChildrenGenerated; i++) {
-          horizontalLabel += "_" + horizontalLabelList.get(i);
-        }
-      } else {
+      if (!horizontalLabelList.isEmpty()) {
+        label += "->";
+        int numLabels = Math.min(horizontalLabelList.size(), (markovization ? HORZ_ORDER_MARKOVIZATION : Integer.MAX_VALUE));
         // include only the last number of labels
-        int startIndex = numChildrenGenerated - numLabels;
-        horizontalLabel += "..." + horizontalLabelList.get(startIndex);
+        int startIndex = Math.max(numChildrenGenerated - numLabels, 0);
+        label += "..." + horizontalLabelList.get(startIndex);
         for (int i = startIndex + 1; i < numChildrenGenerated; i++) {
-          horizontalLabel += "_" + horizontalLabelList.get(i);
+          label += "_" + horizontalLabelList.get(i);
         }
       }
 
-      return new Tree<String>(horizontalLabel, children);
+      return new Tree<String>(label, children);
     }
 
-    private static String getVerticallyMarkovizedTreeLabel(List<String> verticalLabelList) {
-      String verticalLabel = verticalLabelList.get(verticalLabelList.size() - 1);
-      int numLabels = Math.min(verticalLabelList.size(), VERT_ORDER_MARKOVIZATION);
-      for (int i = 0; i < numLabels - 1; i++) {
-        verticalLabel += "^" + verticalLabelList.get(verticalLabelList.size() - (i + 2));
-      }
-      return verticalLabel;
+    private static String addVerticalMarkovization(String label, String verticalLabel) {
+      return label + ((markovization && VERT_ORDER_MARKOVIZATION > 1) ? "^" + verticalLabel : "");
     }
 
     public static Tree<String> unAnnotateTree(Tree<String> annotatedTree) {
@@ -937,6 +941,15 @@ for (int i=0; i < backPointers.length; i++) {
     }
     if (argMap.containsKey("-quiet")) {
       verbose = false;
+    }
+    if (argMap.containsKey("-m")) {
+      markovization = true;
+    }
+    if (argMap.containsKey("-TAG-PA")) {
+      splitPreterminals = true;
+    }
+    if (argMap.containsKey("-u")) {
+      splitUnaryRewrites = true;
     }
 
     System.out.print("Loading training trees (sections 2-21) ... ");
